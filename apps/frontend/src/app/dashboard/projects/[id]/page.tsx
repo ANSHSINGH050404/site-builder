@@ -55,6 +55,10 @@ export default function ProjectPage() {
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState("");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  // "idle" | "creating" | "live" | "error"
+  const [sandboxStatus, setSandboxStatus] = useState<
+    "idle" | "creating" | "live" | "error"
+  >("idle");
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -89,6 +93,15 @@ export default function ProjectPage() {
     };
     load();
   }, [projectId, isAuthenticated, router, setActiveProject, setConversations]);
+
+  // Sync sandbox status from loaded project data
+  useEffect(() => {
+    if (!activeProject) return;
+    if (activeProject.sandboxUrl) setSandboxStatus("live");
+    else if (activeProject.sandboxId) setSandboxStatus("creating");
+    // else remains "idle"
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProject?.id]);
 
   useEffect(() => {
     scrollToBottom();
@@ -190,7 +203,8 @@ export default function ProjectPage() {
             };
             addConversation(agentMsg);
           } else if (eventLine === "tool_call") {
-            // Tool call in progress
+            // Tool call in progress — sandbox is being set up
+            setSandboxStatus("creating");
             const toolMsg: ConversationMessage = {
               id: `tool-${Date.now()}-${Math.random()}`,
               projectId,
@@ -204,8 +218,10 @@ export default function ProjectPage() {
           } else if (eventLine === "preview_url") {
             // Sandbox is live!
             setPreviewUrl(payload.url);
+            setSandboxStatus("live");
             setActiveProject({ ...activeProject!, sandboxUrl: payload.url });
           } else if (eventLine === "error") {
+            setSandboxStatus("error");
             setSendError(payload.message || "Agent error");
           }
           // "done" event — stream ended, nothing to do
@@ -436,6 +452,170 @@ export default function ProjectPage() {
             )}
           </div>
         </header>
+
+        {/* ── Sandbox Status Bar ── */}
+        {(() => {
+          const liveUrl = previewUrl || activeProject?.sandboxUrl;
+          const status = liveUrl ? "live" : sandboxStatus;
+          const cfg = {
+            idle: {
+              bg: "rgba(255,255,255,0.04)",
+              border: "rgba(255,255,255,0.07)",
+              dot: "#666",
+              pulse: false,
+              label: "No sandbox yet",
+              sub: "Send a message to start building",
+            },
+            creating: {
+              bg: "rgba(234,179,8,0.08)",
+              border: "rgba(234,179,8,0.2)",
+              dot: "#eab308",
+              pulse: true,
+              label: "Sandbox starting…",
+              sub: "Agent is setting up your environment",
+            },
+            live: {
+              bg: "rgba(16,185,129,0.08)",
+              border: "rgba(16,185,129,0.2)",
+              dot: "#10b981",
+              pulse: false,
+              label: "Sandbox live",
+              sub: liveUrl || "",
+            },
+            error: {
+              bg: "rgba(239,68,68,0.08)",
+              border: "rgba(239,68,68,0.2)",
+              dot: "#ef4444",
+              pulse: false,
+              label: "Sandbox error",
+              sub: "Check the chat for details",
+            },
+          }[status];
+          return (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "8px 20px",
+                background: cfg.bg,
+                borderBottom: `1px solid ${cfg.border}`,
+                transition: "all 0.4s ease",
+              }}
+            >
+              {/* Dot */}
+              <span
+                style={{
+                  position: "relative",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                }}
+              >
+                {cfg.pulse && (
+                  <span
+                    style={{
+                      position: "absolute",
+                      width: 16,
+                      height: 16,
+                      borderRadius: "50%",
+                      background: cfg.dot,
+                      opacity: 0.25,
+                      animation: "ping 1.2s cubic-bezier(0,0,0.2,1) infinite",
+                    }}
+                  />
+                )}
+                <span
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: "50%",
+                    background: cfg.dot,
+                    display: "block",
+                  }}
+                />
+              </span>
+
+              {/* Labels */}
+              <span
+                style={{
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: "var(--text-primary)",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {cfg.label}
+              </span>
+              {cfg.sub && (
+                <span
+                  style={{
+                    fontSize: 12,
+                    color: "var(--text-muted)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    flex: 1,
+                  }}
+                >
+                  {status === "live" ? (
+                    <a
+                      href={liveUrl!}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        color: "#10b981",
+                        textDecoration: "none",
+                        fontFamily: "var(--font-mono, monospace)",
+                        fontSize: 11,
+                      }}
+                    >
+                      {liveUrl}
+                    </a>
+                  ) : (
+                    cfg.sub
+                  )}
+                </span>
+              )}
+
+              {/* Open button */}
+              {status === "live" && liveUrl && (
+                <a
+                  id="sandbox-open-btn"
+                  href={liveUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn btn-ghost"
+                  style={{
+                    padding: "4px 12px",
+                    fontSize: 12,
+                    marginLeft: "auto",
+                    flexShrink: 0,
+                    border: "1px solid rgba(16,185,129,0.3)",
+                    color: "#10b981",
+                  }}
+                >
+                  <ExternalLink size={12} />
+                  Open
+                </a>
+              )}
+
+              {/* Spinner when creating */}
+              {status === "creating" && (
+                <RefreshCw
+                  size={13}
+                  style={{
+                    color: "#eab308",
+                    animation: "spin 1s linear infinite",
+                    marginLeft: "auto",
+                    flexShrink: 0,
+                  }}
+                />
+              )}
+            </div>
+          );
+        })()}
 
         <div className="project-layout">
           {/* Chat Panel */}
