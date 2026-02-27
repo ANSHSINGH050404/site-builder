@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { prisma } from "../../../../packages/db";
 
+
 export const createProject = async (req: Request, res: Response) => {
   try {
     const { title, initialPrompt } = req.body;
@@ -26,6 +27,8 @@ export const createProject = async (req: Request, res: Response) => {
   }
 };
 
+
+
 export const getProjects = async (req: Request, res: Response) => {
   try {
     const userId = req.user?.id;
@@ -42,6 +45,7 @@ export const getProjects = async (req: Request, res: Response) => {
     return res.status(500).json({ error: "Internal server error" });
   }
 };
+
 
 export const getProjectById = async (req: Request, res: Response) => {
   try {
