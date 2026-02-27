@@ -1,9 +1,8 @@
 import type { Request, Response } from "express";
 import { registerUserSchema, loginUserSchema } from "../types/user.type.js";
-import { prisma } from "db";
+import { prisma } from "../../../../packages/db";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import "dotenv/config";
 
 const generateToken = (userId: string) => {
   return jwt.sign({ id: userId }, process.env.JWT_SECRET || "", {
@@ -36,7 +35,12 @@ export const register = async (req: Request, res: Response) => {
       maxAge: 3600000,
     });
     return res.status(201).json({ message: "User created successfully" });
-  } catch (e) {
+  } catch (e: any) {
+    if (e.name === "ZodError") {
+      return res
+        .status(400)
+        .json({ error: "Validation failed", details: e.errors });
+    }
     console.error(e);
     return res.status(500).json({ error: "Internal server error" });
   }
@@ -63,7 +67,12 @@ export const login = async (req: Request, res: Response) => {
       maxAge: 3600000,
     });
     return res.json({ message: "Login successful" });
-  } catch (e) {
+  } catch (e: any) {
+    if (e.name === "ZodError") {
+      return res
+        .status(400)
+        .json({ error: "Validation failed", details: e.errors });
+    }
     console.error(e);
     return res.status(500).json({ error: "Internal server error" });
   }
