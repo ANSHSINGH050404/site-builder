@@ -31,9 +31,12 @@ export async function createSandbox(projectId: string): Promise<Sandbox> {
     } catch (e: any) {
       if (e?.message?.includes("not found")) {
         console.warn(
-          `Template '${templateName}' not found — falling back to 'base'. Run 'bun run build-template-dev' to build your custom template.`,
+          `Template '${templateName}' not found — falling back to 'code-interpreter-v1'. Run 'bun run build-template-dev' to build your custom template.`,
         );
-        sandbox = await Sandbox.create("base");
+        // code-interpreter-v1 has Node.js + npm pre-installed
+        sandbox = await Sandbox.create("code-interpreter-v1", {
+          timeoutMs: 300_000,
+        });
       } else {
         throw e;
       }
