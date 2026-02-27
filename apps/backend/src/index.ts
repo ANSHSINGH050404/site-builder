@@ -1,28 +1,27 @@
+import "dotenv/config";
 import express from "express";
 import morgan from "morgan";
 import cookieParser from "cookie-parser";
 import authRouter from "./routes/auth.route";
 import projectRouter from "./routes/project_route";
-import cors from "cors"
-
+import cors from "cors";
 
 const app = express();
 app.use(express.json());
 app.use(cookieParser());
 app.use(morgan("dev"));
-app.use(cors())
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL || "http://localhost:3001",
+    credentials: true, // required to forward the JWT cookie
+  }),
+);
 
 const port = 3000;
-
-
-
-
 
 app.get("/health", (req, res) => {
   res.send("Hello Likeable");
 });
-
-
 
 console.log("Mounting routes...");
 app.use("/auth", authRouter);

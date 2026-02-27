@@ -23,7 +23,21 @@ export async function createSandbox(projectId: string): Promise<Sandbox> {
     }
   }
   if (!sandbox) {
-    sandbox = await Sandbox.create("site-builder-react-base");
+    // Use the custom template if built, otherwise fall back to E2B base
+    const templateName =
+      process.env.E2B_TEMPLATE || "site-builder-react-base-dev";
+    try {
+      sandbox = await Sandbox.create(templateName);
+    } catch (e: any) {
+      if (e?.message?.includes("not found")) {
+        console.warn(
+          `Template '${templateName}' not found — falling back to 'base'. Run 'bun run build-template-dev' to build your custom template.`,
+        );
+        sandbox = await Sandbox.create("base");
+      } else {
+        throw e;
+      }
+    }
     project.sandboxId = sandbox.sandboxId;
     await prisma.project.update({
       where: { id: projectId },

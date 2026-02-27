@@ -1,9 +1,14 @@
-import { AIMessage, HumanMessage } from "@langchain/core/messages";
+import {
+  AIMessage,
+  HumanMessage,
+  SystemMessage,
+} from "@langchain/core/messages";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 import { StateGraph } from "@langchain/langgraph";
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { getTools } from "../tools/tools";
 import { plan_prompt } from "../prompts/plan_prompt";
+import { system_message } from "../prompts/system_message";
 import { llm } from "../config/llm";
 import type { GraphState } from "../types/state.type";
 import { StateAnnotation } from "../types/state.type";
@@ -67,8 +72,14 @@ export default async function createAgentGraph({
         throw new Error("No messages provided to agentNode");
       }
 
-      // Try invoking with the model that has tools bound
-      const response = await modelWithTools.invoke(state.messages);
+      // Prepend system message so the model always has its instructions
+      const systemMsg = new SystemMessage(
+        system_message.replace("{{context}}", ""),
+      );
+      const response = await modelWithTools.invoke([
+        systemMsg,
+        ...state.messages,
+      ]);
 
       if (!response) {
         throw new Error("Model returned undefined response");
@@ -118,22 +129,31 @@ export default async function createAgentGraph({
   const toolNode = new ToolNode(tools);
 
   const shouldContinue = (state: GraphState) => {
-    const lastMessage = state.messages[state.messages.length - 1] as AIMessage;
+    const messages = state.messages;
+    const lastMessage = messages[messages.length - 1] as AIMessage;
 
-    // Safety check: if we have too many messages, stop to prevent infinite loops
-    if (state.messages.length > 200) {
-      console.warn(
-        "Too many messages in state, stopping to prevent infinite loop",
-      );
+    // Hard stop — too many iterations
+    if (messages.length > 60) {
+      console.warn("Message limit reached — stopping agent loop");
       return "__end__";
     }
 
-    // Check if the last message has tool calls
+    // If the last ToolMessage contains a preview URL, the job is done — stop
+    const prevMessage = messages[messages.length - 1];
+    if (prevMessage?.constructor?.name === "ToolMessage") {
+      const content = String(prevMessage.content);
+      if (content.match(/https:\/\/5173-[\w-]+\.e2b\.app/)) {
+        console.log("Dev server started successfully — agent stopping");
+        return "__end__";
+      }
+    }
+
+    // Check if the last AI message has tool calls — if so, keep going
     if (lastMessage.tool_calls && lastMessage.tool_calls.length > 0) {
       return "tools";
     }
 
-    // If no tool calls, this is a final response - end the graph
+    // No tool calls → AI gave a final text response → done
     return "__end__";
   };
 

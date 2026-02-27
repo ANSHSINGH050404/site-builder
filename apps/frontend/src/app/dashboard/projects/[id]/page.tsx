@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useRouter, useParams } from "next/navigation";
+import { useRouter, useParams, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
   Send,
@@ -15,7 +15,7 @@ import {
   ExternalLink,
   Loader2,
 } from "lucide-react";
-import { getProjectById, createConversationMessage } from "@/lib/api";
+import { getProjectById } from "@/lib/api";
 import {
   useProjectStore,
   useAuthStore,
@@ -38,6 +38,7 @@ const TOOL_LABELS: Record<string, string> = {
 export default function ProjectPage() {
   const router = useRouter();
   const params = useParams();
+  const searchParams = useSearchParams();
   const projectId = params?.id as string;
 
   const { isAuthenticated } = useAuthStore();
@@ -53,6 +54,7 @@ export default function ProjectPage() {
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState("");
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -92,13 +94,38 @@ export default function ProjectPage() {
     scrollToBottom();
   }, [conversations, scrollToBottom]);
 
-  const handleSend = async () => {
-    if (!message.trim() || sending) return;
-    setSendError("");
-    const content = message.trim();
-    setMessage("");
+  // Auto-trigger agent when arriving from a fresh project creation
+  const autoStartFiredRef = useRef(false);
+  useEffect(() => {
+    if (loadingProject || autoStartFiredRef.current) return;
+    const autostart = searchParams?.get("autostart");
+    const prompt = searchParams?.get("prompt");
+    if (autostart === "1" && prompt) {
+      autoStartFiredRef.current = true;
+      window.history.replaceState({}, "", window.location.pathname);
+      // Small delay so the UI is fully mounted, then programmatically send
+      const timer = setTimeout(async () => {
+        const decoded = decodeURIComponent(prompt);
+        setMessage(decoded);
+        // Trigger send via a synthetic approach: update message then click send
+        sendRef.current?.(decoded);
+      }, 600);
+      return () => clearTimeout(timer);
+    }
+  }, [loadingProject, searchParams]);
 
-    // Optimistic UI – show user message immediately
+  // Ref to expose handleSend so autostart can call it with a custom message
+  const sendRef = useRef<((msg: string) => void) | null>(null);
+
+  const handleSend = async (msgOverride?: string) => {
+    const content = (msgOverride ?? message).trim();
+    if (!content || sending) return;
+    setSendError("");
+    setMessage("");
+    setSending(true);
+    sendRef.current = handleSend; // keep ref current
+
+    // Optimistic UI — show user message immediately
     const userMsg: ConversationMessage = {
       id: `tmp-${Date.now()}`,
       projectId,
@@ -108,26 +135,84 @@ export default function ProjectPage() {
       createdAt: new Date().toISOString(),
     };
     addConversation(userMsg);
-    setSending(true);
 
     try {
-      // Persist conversation message to backend
-      const res = await createConversationMessage(projectId, {
-        contents: content,
-        type: "TEXT_MESSAGE",
-        from: "USER",
+      const apiBase =
+        process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+
+      // Use fetch with ReadableStream to consume the SSE from /chat
+      const response = await fetch(`${apiBase}/projects/${projectId}/chat`, {
+        method: "POST",
+        credentials: "include", // send cookie
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: content }),
       });
 
-      // Replace optimistic message with the real one
-      const saved: ConversationMessage = res.data.conversation;
-      setConversations(
-        conversations.filter((m) => m.id !== userMsg.id).concat(saved),
-      );
+      if (!response.ok || !response.body) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err?.error || "Failed to contact agent");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE chunks are separated by double newlines
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+
+        for (const part of parts) {
+          const eventLine = part.match(/^event: (.+)$/m)?.[1];
+          const dataLine = part.match(/^data: (.+)$/m)?.[1];
+          if (!dataLine) continue;
+
+          let payload: any;
+          try {
+            payload = JSON.parse(dataLine);
+          } catch {
+            continue;
+          }
+
+          if (eventLine === "message") {
+            // AI text reply
+            const agentMsg: ConversationMessage = {
+              id: `agent-${Date.now()}-${Math.random()}`,
+              projectId,
+              from: "AGENT",
+              type: "TEXT_MESSAGE",
+              contents: payload.contents,
+              createdAt: new Date().toISOString(),
+            };
+            addConversation(agentMsg);
+          } else if (eventLine === "tool_call") {
+            // Tool call in progress
+            const toolMsg: ConversationMessage = {
+              id: `tool-${Date.now()}-${Math.random()}`,
+              projectId,
+              from: "AGENT",
+              type: "TOOL_CALL",
+              contents: `Running: ${payload.tool}`,
+              toolCall: payload.tool?.toUpperCase().replace(/-/g, "_") as any,
+              createdAt: new Date().toISOString(),
+            };
+            addConversation(toolMsg);
+          } else if (eventLine === "preview_url") {
+            // Sandbox is live!
+            setPreviewUrl(payload.url);
+            setActiveProject({ ...activeProject!, sandboxUrl: payload.url });
+          } else if (eventLine === "error") {
+            setSendError(payload.message || "Agent error");
+          }
+          // "done" event — stream ended, nothing to do
+        }
+      }
     } catch (err: any) {
-      setSendError(
-        err?.response?.data?.error ||
-          "Failed to send message. Please try again.",
-      );
+      setSendError(err?.message || "Failed to send message. Please try again.");
     } finally {
       setSending(false);
       textareaRef.current?.focus();
@@ -468,7 +553,7 @@ export default function ProjectPage() {
               <button
                 id="send-message-btn"
                 className="chat-send-btn"
-                onClick={handleSend}
+                onClick={() => handleSend()}
                 disabled={!message.trim() || sending}
                 aria-label="Send message"
               >
@@ -498,10 +583,10 @@ export default function ProjectPage() {
               )}
             </div>
 
-            {activeProject?.sandboxUrl ? (
+            {previewUrl || activeProject?.sandboxUrl ? (
               <iframe
                 className="preview-iframe"
-                src={activeProject.sandboxUrl}
+                src={previewUrl || activeProject!.sandboxUrl!}
                 title="Site Preview"
                 sandbox="allow-scripts allow-same-origin allow-forms"
               />

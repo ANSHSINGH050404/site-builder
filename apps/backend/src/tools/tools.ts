@@ -8,7 +8,16 @@ import { createSandbox } from "../services/sandbox.service";
 
 const APP_ROOT = "/home/user/react-app";
 
-const exaClient = new Exa(process.env.EXASEARCH_API_KEY || "");
+// Lazy — only instantiated when the search tool is actually called
+let _exaClient: Exa | null = null;
+function getExaClient(): Exa {
+  if (!_exaClient) {
+    const key = process.env.EXASEARCH_API_KEY || process.env.EXA_API_KEY;
+    if (!key) throw new Error("EXASEARCH_API_KEY is not set in .env");
+    _exaClient = new Exa(key);
+  }
+  return _exaClient;
+}
 
 export async function getSandbox(projectId: string): Promise<Sandbox> {
   return await createSandbox(projectId);
@@ -378,7 +387,7 @@ function createSearchTool() {
         };
       }
 
-      const response = await exaClient.search(query, options);
+      const response = await getExaClient().search(query, options);
       const formattedResults = response.results.map((result: any) => {
         if (type === "image") {
           return {

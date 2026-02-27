@@ -63,7 +63,9 @@ export default function DashboardPage() {
       setShowModal(false);
       setFormTitle("");
       setFormPrompt("");
-      router.push(`/dashboard/projects/${createdProject.id}`);
+      router.push(
+        `/dashboard/projects/${createdProject.id}?autostart=1&prompt=${encodeURIComponent(formPrompt.trim())}`,
+      );
     } catch (err: any) {
       setCreateError(err?.response?.data?.error || "Failed to create project.");
     } finally {

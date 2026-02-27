@@ -4,7 +4,7 @@ import { reactTemplate } from "./e2b-template";
 
 async function main() {
   await Template.build(reactTemplate, {
-    alias: "likeable-react-base-dev",
+    alias: "site-builder-react-base-dev",
     cpuCount: 1,
     memoryMB: 1024,
     onBuildLogs: defaultBuildLogger(),

@@ -5,6 +5,7 @@ import {
   getProjects,
   getProjectById,
   createProjectConversationChatMessage,
+  chatWithAgent,
 } from "../controllers/project.controller";
 
 const router: Router = Router();
@@ -15,4 +16,5 @@ router.post("/", createProject);
 router.get("/", getProjects);
 router.get("/:id", getProjectById);
 router.post("/:projectId/conversations", createProjectConversationChatMessage);
+router.post("/:projectId/chat", chatWithAgent); // ← AI agent SSE endpoint
 export default router;
