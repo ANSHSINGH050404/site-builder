@@ -2,9 +2,9 @@ import { tool } from "@langchain/core/tools";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 import { Sandbox } from "@e2b/code-interpreter";
-import { prisma } from "../../../../packages/db";
+import { prisma } from "db";
 import { Exa } from "exa-js";
-import { createSandbox } from "../services/sandbox.service.js";
+import { createSandbox } from "../services/sandbox.service";
 
 const APP_ROOT = "/home/user/react-app";
 
@@ -56,7 +56,7 @@ function createAddDependencyTool(sandbox: Sandbox) {
           .string()
           .describe("The npm package to install, e.g. react-icons"),
       }),
-    }
+    },
   );
 }
 
@@ -95,7 +95,7 @@ function createWriteFileTool(sandbox: Sandbox, projectId: string) {
         filepath: z.string().describe("The file path, e.g. src/App.tsx"),
         content: z.string().describe("The content to write to the file"),
       }),
-    }
+    },
   );
 }
 
@@ -118,7 +118,7 @@ function createReadFileTool(sandbox: Sandbox) {
       schema: z.object({
         filepath: z.string().describe("Path like src/App.tsx or package.json"),
       }),
-    }
+    },
   );
 }
 
@@ -144,7 +144,7 @@ function createDeleteFileTool(sandbox: Sandbox, projectId: string) {
       schema: z.object({
         filepath: z.string().describe("Path like src/old-component.tsx"),
       }),
-    }
+    },
   );
 }
 
@@ -161,7 +161,7 @@ function createExecuteCommandTool(sandbox: Sandbox) {
       ];
 
       const isBlocked = blockedPatterns.some((pattern) =>
-        pattern.test(command)
+        pattern.test(command),
       );
       if (isBlocked) {
         return `ERROR: App creation commands are not allowed. The React app already exists at ${APP_ROOT}. Instead, use the 'write' or 'write-multiple-files' tools to create/modify files directly. For example, use 'write' to create src/components/YourComponent.tsx instead of creating a new app.`;
@@ -181,7 +181,7 @@ function createExecuteCommandTool(sandbox: Sandbox) {
       schema: z.object({
         command: z.string().describe("The shell command to run"),
       }),
-    }
+    },
   );
 }
 
@@ -210,7 +210,7 @@ function createRenameFileTool(sandbox: Sandbox, projectId: string) {
         oldPath: z.string().describe("The current path of the file"),
         newPath: z.string().describe("The new path of the file"),
       }),
-    }
+    },
   );
 }
 
@@ -232,7 +232,7 @@ function createListDirectoriesTool(sandbox: Sandbox) {
           .default(".")
           .describe('Relative path like "." or "src"'),
       }),
-    }
+    },
   );
 }
 
@@ -241,7 +241,7 @@ function createTestBuildTool(sandbox: Sandbox) {
     async () => {
       try {
         await sandbox.commands.run(
-          `cd ${APP_ROOT} && rm -rf node_modules/.vite-temp && npm install`
+          `cd ${APP_ROOT} && rm -rf node_modules/.vite-temp && npm install`,
         );
         await sandbox.commands.run(`npm run build`);
         return `Build PASSED successfully.`;
@@ -254,7 +254,7 @@ function createTestBuildTool(sandbox: Sandbox) {
       description:
         "Run npm install and npm run build to validate the app compiles",
       schema: z.object({}),
-    }
+    },
   );
 }
 
@@ -297,11 +297,11 @@ function createWriteMultipleFilesTool(sandbox: Sandbox, projectId: string) {
             z.object({
               path: z.string().describe("Relative path (e.g., src/App.tsx)"),
               content: z.string().describe("File contents"),
-            })
+            }),
           )
           .min(1),
       }),
-    }
+    },
   );
 }
 
@@ -311,21 +311,21 @@ function createStartDevServerTool(sandbox: Sandbox) {
       try {
         // Check if server is already running
         const checkOutput = await sandbox.commands.run(
-          `lsof -ti:5173 2>/dev/null || echo "not_running"`
+          `lsof -ti:5173 2>/dev/null || echo "not_running"`,
         );
         if (!checkOutput.stdout.includes("not_running")) {
           return `Dev server is already running on port 5173. Preview URL: https://5173-${sandbox.sandboxId}.e2b.app`;
         }
 
         const checkPackageJson = await sandbox.commands.run(
-          `cd ${APP_ROOT} && test -f package.json && echo "exists" || echo "missing"`
+          `cd ${APP_ROOT} && test -f package.json && echo "exists" || echo "missing"`,
         );
         if (checkPackageJson.stdout.includes("missing")) {
           return `Error: package.json not found in ${APP_ROOT}. Make sure you're working in the correct directory.`;
         }
 
         await sandbox.commands.run(
-          `cd ${APP_ROOT} && nohup npm run dev > /tmp/vite.log 2>&1 &`
+          `cd ${APP_ROOT} && nohup npm run dev > /tmp/vite.log 2>&1 &`,
         );
 
         let attempts = 0;
@@ -333,7 +333,7 @@ function createStartDevServerTool(sandbox: Sandbox) {
         while (attempts < 10 && !serverRunning) {
           await new Promise((resolve) => setTimeout(resolve, 1000));
           const verifyOutput = await sandbox.commands.run(
-            `lsof -ti:5173 2>/dev/null || echo "not_running"`
+            `lsof -ti:5173 2>/dev/null || echo "not_running"`,
           );
           if (!verifyOutput.stdout.includes("not_running")) {
             serverRunning = true;
@@ -346,7 +346,7 @@ function createStartDevServerTool(sandbox: Sandbox) {
           return `Dev server started successfully on port 5173.\n\nPreview URL: https://5173-${sandbox.sandboxId}.e2b.app\n\nThe dev server is running in the background. You can access your app at the preview URL above.`;
         } else {
           const logs = await sandbox.commands.run(
-            `tail -20 /tmp/vite.log 2>/dev/null || echo "No logs available"`
+            `tail -20 /tmp/vite.log 2>/dev/null || echo "No logs available"`,
           );
           return `Dev server may not have started properly. Check the logs:\n${logs.stdout}\n\nYou can try running 'cd ${APP_ROOT} && npm run dev' manually in the sandbox.`;
         }
@@ -359,7 +359,7 @@ function createStartDevServerTool(sandbox: Sandbox) {
       description:
         "Start the Vite dev server on port 5173 in the background. This makes the app accessible via the preview URL. The React app should already be set up in /home/user/react-app - do not create a new app.",
       schema: z.object({}),
-    }
+    },
   );
 }
 
@@ -368,7 +368,7 @@ function createSearchTool() {
     async ({ query, type }) => {
       const options: any = {
         useAutoPrompts: true,
-        numResuls: 3,
+        numResults: 3,
         type: "neural",
       };
 
@@ -405,7 +405,7 @@ function createSearchTool() {
         query: z.string().describe("The query to search for"),
         type: z.enum(["general", "image"]).default("general"),
       }),
-    }
+    },
   );
 }
 

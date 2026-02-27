@@ -1,12 +1,12 @@
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 import { StateGraph } from "@langchain/langgraph";
-import { ChatOpenAI } from "@langchain/openai";
-import { getTools } from "../tools/tool.js";
-import { plan_prompt } from "../prompts/plan_prompt.js";
-import { llm } from "../config/llm.js";
-import type { GraphState } from "../types/state.type.js";
-import { StateAnnotation } from "../types/state.type.js";
+import { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import { getTools } from "../tools/tools";
+import { plan_prompt } from "../prompts/plan_prompt";
+import { llm } from "../config/llm";
+import type { GraphState } from "../types/state.type";
+import { StateAnnotation } from "../types/state.type";
 import { MemorySaver } from "@langchain/langgraph";
 
 const memorySaver = new MemorySaver();
@@ -16,15 +16,19 @@ export default async function createAgentGraph({
   model,
 }: {
   projectId: string;
-  model: ChatOpenAI;
+  model: BaseChatModel;
 }) {
   const tools = await getTools({ projectId });
+
+  if (!model.bindTools) {
+    throw new Error("Model does not support tool calling");
+  }
 
   const modelWithTools = model.bindTools(tools);
 
   const plannerNode = async (state: GraphState) => {
     const userMessages = state.messages.filter(
-      (msg) => msg instanceof HumanMessage
+      (msg) => msg instanceof HumanMessage,
     );
     const userRequest = userMessages
       .map((msg) => {
@@ -85,7 +89,7 @@ export default async function createAgentGraph({
         try {
           console.error(
             "API Response:",
-            JSON.stringify(error.response, null, 2)
+            JSON.stringify(error.response, null, 2),
           );
         } catch (e) {
           console.error("Could not stringify API response");
@@ -98,7 +102,7 @@ export default async function createAgentGraph({
         error?.message?.includes("parts")
       ) {
         console.error(
-          "This appears to be a Google GenAI API response parsing error."
+          "This appears to be a Google GenAI API response parsing error.",
         );
         console.error("Possible causes:");
         console.error("  1. Invalid API key");
@@ -115,18 +119,20 @@ export default async function createAgentGraph({
 
   const shouldContinue = (state: GraphState) => {
     const lastMessage = state.messages[state.messages.length - 1] as AIMessage;
-    
+
     // Safety check: if we have too many messages, stop to prevent infinite loops
     if (state.messages.length > 200) {
-      console.warn("Too many messages in state, stopping to prevent infinite loop");
+      console.warn(
+        "Too many messages in state, stopping to prevent infinite loop",
+      );
       return "__end__";
     }
-    
+
     // Check if the last message has tool calls
     if (lastMessage.tool_calls && lastMessage.tool_calls.length > 0) {
       return "tools";
     }
-    
+
     // If no tool calls, this is a final response - end the graph
     return "__end__";
   };

@@ -1,5 +1,5 @@
 import { Sandbox } from "@e2b/code-interpreter";
-import { prisma } from "../../../../packages/db";
+import { prisma } from "db";
 
 export async function createSandbox(projectId: string): Promise<Sandbox> {
   let sandbox: Sandbox | null = null;

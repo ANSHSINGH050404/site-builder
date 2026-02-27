@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
-import { registerUserSchema, loginUserSchema } from "../types/user.type.js";
-import { prisma } from "../../../../packages/db";
+import { registerUserSchema, loginUserSchema } from "../types/user.type";
+import { prisma } from "db";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 
