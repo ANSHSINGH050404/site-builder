@@ -23,7 +23,7 @@ export async function createSandbox(projectId: string): Promise<Sandbox> {
     }
   }
   if (!sandbox) {
-    sandbox = await Sandbox.create("likeable-react-base");
+    sandbox = await Sandbox.create("site-builder-react-base");
     project.sandboxId = sandbox.sandboxId;
     await prisma.project.update({
       where: { id: projectId },
