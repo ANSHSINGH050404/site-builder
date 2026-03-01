@@ -2,7 +2,15 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Zap, Mail, Lock, AlertCircle, CheckCircle2 } from "lucide-react";
+import {
+  Zap,
+  Mail,
+  Lock,
+  AlertCircle,
+  CheckCircle2,
+  Eye,
+  EyeOff,
+} from "lucide-react";
 import { registerUser, loginUser } from "@/lib/api";
 import { useAuthStore } from "@/lib/store";
 
@@ -16,6 +24,7 @@ export default function AuthPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -101,14 +110,14 @@ export default function AuthPage() {
             />
           </div>
 
-          <div className="form-group">
+          <div className="form-group relative">
             <label className="form-label" htmlFor="password">
               <Lock size={12} style={{ display: "inline", marginRight: 4 }} />
               Password
             </label>
             <input
               id="password"
-              type="password"
+              type={showPassword ? "text" : "password"}
               className="form-input"
               placeholder={
                 mode === "register"
@@ -120,6 +129,17 @@ export default function AuthPage() {
               required
               minLength={8}
             />
+
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+            >
+              {showPassword ? (
+                <EyeOff className="w-5 h-5" />
+              ) : (
+                <Eye className="w-5 h-5" />
+              )}
+            </button>
           </div>
 
           <button
