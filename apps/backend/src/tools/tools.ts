@@ -41,6 +41,9 @@ export async function getTools({
     createTestBuildTool(sandbox),
     createWriteMultipleFilesTool(sandbox, projectId),
     createStartDevServerTool(sandbox),
+    createCheckMissingDependenciesTool(sandbox),
+    createGetContextTool(projectId),
+    createSaveContextTool(projectId),
     createSearchTool(),
   ];
 
@@ -177,10 +180,21 @@ function createExecuteCommandTool(sandbox: Sandbox) {
       }
 
       try {
-        await sandbox.commands.run(`cd ${APP_ROOT} && ${command}`);
-        return `Command executed successfully.`;
-      } catch (e) {
-        return `Command failed: ${e}`;
+        const result = await sandbox.commands.run(
+          `cd ${APP_ROOT} && ${command}`,
+        );
+        const output = [result.stdout, result.stderr]
+          .filter(Boolean)
+          .join("\n")
+          .trim();
+        return output
+          ? `Command executed successfully.\n\nOutput:\n${output}`
+          : `Command executed successfully (no output).`;
+      } catch (e: any) {
+        const stdout = e?.stdout || "";
+        const stderr = e?.stderr || "";
+        const detail = [stdout, stderr].filter(Boolean).join("\n").trim();
+        return `Command failed: ${e}${detail ? `\n\nOutput:\n${detail}` : ""}`;
       }
     },
     {
@@ -227,9 +241,20 @@ function createListDirectoriesTool(sandbox: Sandbox) {
   return tool(
     async ({ path }) => {
       const cmd = `tree -I 'node_modules|.*' ${path}`;
-      const tree = await sandbox.commands.run(cmd);
-
-      return `Directory structure:\n${tree}`;
+      try {
+        const result = await sandbox.commands.run(cmd);
+        return `Directory structure:\n${result.stdout || result.stderr || "(empty)"}`;
+      } catch (e: any) {
+        // Fallback to ls if tree isn't available
+        try {
+          const fallback = await sandbox.commands.run(
+            `find ${path} -not -path '*/node_modules/*' -not -path '*/.*' | sort | head -100`,
+          );
+          return `Directory structure:\n${fallback.stdout || "(empty)"}`;
+        } catch {
+          return `Failed to list directories: ${e}`;
+        }
+      }
     },
     {
       name: "list_directories",
@@ -249,19 +274,30 @@ function createTestBuildTool(sandbox: Sandbox) {
   return tool(
     async () => {
       try {
-        await sandbox.commands.run(
+        const installResult = await sandbox.commands.run(
           `cd ${APP_ROOT} && rm -rf node_modules/.vite-temp && npm install`,
         );
-        await sandbox.commands.run(`npm run build`);
-        return `Build PASSED successfully.`;
-      } catch (e) {
-        return `Build FAILED: ${e}`;
+        const buildResult = await sandbox.commands.run(
+          `cd ${APP_ROOT} && npm run build`,
+        );
+        const output = [
+          installResult.stdout,
+          buildResult.stdout,
+          buildResult.stderr,
+        ]
+          .filter(Boolean)
+          .join("\n")
+          .trim();
+        return `Build PASSED successfully.${output ? `\n\nOutput:\n${output}` : ""}`;
+      } catch (e: any) {
+        const detail = [e?.stdout, e?.stderr].filter(Boolean).join("\n").trim();
+        return `Build FAILED: ${e}${detail ? `\n\nOutput:\n${detail}` : ""}`;
       }
     },
     {
       name: "test_build",
       description:
-        "Run npm install and npm run build to validate the app compiles",
+        "Run npm install and npm run build to validate the app compiles. Returns detailed error output if it fails.",
       schema: z.object({}),
     },
   );
@@ -271,35 +307,35 @@ function createWriteMultipleFilesTool(sandbox: Sandbox, projectId: string) {
   return tool(
     async ({ files }) => {
       try {
-        const fileObjects = files.map((f) => ({
-          path: `${APP_ROOT}/${f.path.replace(/^\/+/, "")}`,
-          content: f.content,
-        }));
+        for (const f of files) {
+          const fullPath = `${APP_ROOT}/${f.path.replace(/^\/+/, "")}`;
+          await sandbox.files.write(fullPath, f.content);
 
-        for (const file of fileObjects) {
-          await sandbox.files.write(file.path, file.content);
+          await prisma.projectFile.upsert({
+            where: { projectId_path: { projectId, path: f.path } },
+            create: {
+              projectId,
+              path: f.path,
+              content: f.content,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            },
+            update: {
+              content: f.content,
+              updatedAt: new Date(),
+            },
+          });
         }
 
-        await prisma.projectFile.createMany({
-          data: fileObjects.map((f) => ({
-            projectId,
-            path: f.path,
-            content: f.content,
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          })),
-          skipDuplicates: true,
-        });
-
         const paths = files.map((f) => f.path);
-        return `Successfully created ${paths.length} files: ${paths.join(", ")}`;
+        return `Successfully wrote ${paths.length} files: ${paths.join(", ")}`;
       } catch (e) {
-        return `Failed to create files: ${e}`;
+        return `Failed to write files: ${e}`;
       }
     },
     {
       name: "write_multiple_files",
-      description: "Create multiple files at once for efficiency",
+      description: "Create or overwrite multiple files at once for efficiency",
       schema: z.object({
         files: z
           .array(
@@ -372,6 +408,125 @@ function createStartDevServerTool(sandbox: Sandbox) {
   );
 }
 
+function createCheckMissingDependenciesTool(sandbox: Sandbox) {
+  return tool(
+    async () => {
+      try {
+        // Read package.json to get declared deps
+        const pkgResult = await sandbox.commands.run(
+          `cat ${APP_ROOT}/package.json`,
+        );
+        const pkg = JSON.parse(pkgResult.stdout || "{}");
+        const declared = new Set([
+          ...Object.keys(pkg.dependencies || {}),
+          ...Object.keys(pkg.devDependencies || {}),
+        ]);
+
+        // Find all imports in source files
+        const grepResult = await sandbox.commands.run(
+          `grep -rh --include="*.tsx" --include="*.ts" --include="*.js" --include="*.jsx" -E "^import .+ from '([^.'][^']*)'\'" ${APP_ROOT}/src 2>/dev/null || true`,
+        );
+
+        const importLines = grepResult.stdout.split("\n").filter(Boolean);
+        const importedPkgs = new Set<string>();
+        for (const line of importLines) {
+          const match = line.match(/from ['"]([^.'"][^'"]*)['"]/);
+          if (match && match[1]) {
+            // Extract root package name (handle scoped packages like @scope/pkg)
+            const parts = match[1].split("/");
+            const first = parts[0] ?? "";
+            const pkgName = first.startsWith("@")
+              ? `${first}/${parts[1] ?? ""}`
+              : first;
+            if (pkgName) importedPkgs.add(pkgName);
+          }
+        }
+
+        const missing = [...importedPkgs].filter((p) => !declared.has(p));
+        if (missing.length === 0) {
+          return `All imported packages are declared in package.json.`;
+        }
+        return `Missing dependencies (imported but not in package.json): ${missing.join(", ")}\n\nRun: npm install ${missing.join(" ")} to install them.`;
+      } catch (e) {
+        return `Failed to check dependencies: ${e}`;
+      }
+    },
+    {
+      name: "check_missing_dependencies",
+      description:
+        "Check if all packages imported in source files are declared in package.json",
+      schema: z.object({}),
+    },
+  );
+}
+
+function createGetContextTool(projectId: string) {
+  return tool(
+    async () => {
+      try {
+        const project = await prisma.project.findUnique({
+          where: { id: projectId },
+          select: { title: true, initialPrompt: true },
+        });
+        const files = await prisma.projectFile.findMany({
+          where: { projectId },
+          select: { path: true, updatedAt: true },
+          orderBy: { updatedAt: "desc" },
+          take: 20,
+        });
+        const filePaths =
+          files.length > 0
+            ? files.map((f) => f.path).join(", ")
+            : "(no files yet)";
+        return (
+          `Project: ${project?.title || projectId}\n` +
+          `Initial goal: ${project?.initialPrompt || ""}\n` +
+          `Files created/modified: ${filePaths}`
+        );
+      } catch (e) {
+        return `Failed to get context: ${e}`;
+      }
+    },
+    {
+      name: "get_context",
+      description:
+        "Retrieve saved project context — the project title, original goal, and list of files already created",
+      schema: z.object({}),
+    },
+  );
+}
+
+function createSaveContextTool(projectId: string) {
+  return tool(
+    async ({ note }) => {
+      try {
+        // Store the note as an agent conversation message so it persists
+        await prisma.conversation.create({
+          data: {
+            projectId,
+            contents: `[CONTEXT NOTE] ${note}`,
+            type: "TEXT_MESSAGE",
+            from: "AGENT",
+          },
+        });
+        return `Context note saved: ${note}`;
+      } catch (e) {
+        return `Failed to save context: ${e}`;
+      }
+    },
+    {
+      name: "save_context",
+      description:
+        "Save a note about the current project state for future sessions",
+      schema: z.object({
+        note: z
+          .string()
+          .describe("A brief note describing what has been built so far"),
+      }),
+    },
+  );
+}
+
 function createSearchTool() {
   return tool(
     async ({ query, type }) => {
@@ -396,20 +551,29 @@ function createSearchTool() {
             url: result.url,
           };
         } else {
-          const summary = result.summary;
           return {
             title: result.title,
             url: result.url,
-            text: summary,
+            text: result.text || result.summary || "",
           };
         }
       });
 
-      return `Found ${formattedResults.length} results:\n${formattedResults.map((result) => `${result?.title}\n${result?.url}\n${result?.image}`).join("\n")}`;
+      return (
+        `Found ${formattedResults.length} results:\n` +
+        formattedResults
+          .map(
+            (r, i) =>
+              `${i + 1}. ${r.title}\n   URL: ${r.url}${
+                r.text ? `\n   ${r.text.slice(0, 300)}...` : ""
+              }`,
+          )
+          .join("\n\n")
+      );
     },
     {
       name: "search",
-      description: "Search the web for information",
+      description: "Search the web for information, documentation, or examples",
       schema: z.object({
         query: z.string().describe("The query to search for"),
         type: z.enum(["general", "image"]).default("general"),

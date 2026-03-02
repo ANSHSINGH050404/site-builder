@@ -1,135 +1,173 @@
-# Turborepo starter
+# SiteBuilder AI
 
-This Turborepo starter is maintained by the Turborepo core team.
+An AI-powered website builder — describe what you want, and the agent writes code, runs it in a live sandbox, and gives you a preview URL. Built with **Next.js**, **Express**, **LangGraph**, and **E2B** sandboxes.
 
-## Using this example
+## Architecture
 
-Run the following command:
+```
+site-builder/
+├── apps/
+│   ├── frontend/      # Next.js 16 app (port 3001)
+│   └── backend/       # Express + LangGraph agent (port 3000)
+└── packages/
+    ├── db/            # Prisma client (PostgreSQL via Neon)
+    └── ui/            # Shared UI components
+```
+
+### How it works
+
+1. **User creates a project** with a title and description on the dashboard
+2. **User sends a message** in the project chat — "Build me a todo app with dark mode"
+3. **Backend receives the message** on `POST /projects/:id/chat` and streams SSE events back
+4. **LangGraph agent** runs a planner → agent → tools loop inside an **E2B sandbox**
+5. **Agent writes files**, runs commands, and starts the Vite dev server
+6. **Preview URL** (`https://5173-<sandboxId>.e2b.app`) is streamed back to the frontend
+7. **Live preview iframe** appears in the right panel
+
+---
+
+## Prerequisites
+
+| Tool       | Version                                    |
+| ---------- | ------------------------------------------ |
+| Node.js    | ≥ 18                                       |
+| Bun        | 1.3.5+                                     |
+| PostgreSQL | via [Neon](https://neon.tech) (serverless) |
+
+---
+
+## Environment Variables
+
+### `apps/backend/.env`
+
+```env
+DATABASE_URL=postgresql://...            # Neon connection string
+GOOGLE_API_KEY=...                       # Google Gemini API key
+JWT_SECRET=...                           # Any random secret
+E2B_API_KEY=...                          # E2B API key (https://e2b.dev)
+FRONTEND_URL=http://localhost:3001
+EXASEARCH_API_KEY=...                    # Exa search API key (https://exa.ai)
+E2B_TEMPLATE=site-builder-react-base-dev # Optional — uses code-interpreter-v1 as fallback
+```
+
+### `apps/frontend/.env`
+
+```env
+NEXT_PUBLIC_API_URL=http://localhost:3000
+```
+
+### `packages/db/.env`
+
+```env
+DATABASE_URL=postgresql://...            # Same as backend
+```
+
+---
+
+## Getting Started
+
+### 1. Install dependencies
 
 ```sh
-npx create-turbo@latest
+bun install
 ```
 
-## What's inside?
+### 2. Set up the database
 
-This Turborepo includes the following packages/apps:
-
-### Apps and Packages
-
-- `docs`: a [Next.js](https://nextjs.org/) app
-- `web`: another [Next.js](https://nextjs.org/) app
-- `@repo/ui`: a stub React component library shared by both `web` and `docs` applications
-- `@repo/eslint-config`: `eslint` configurations (includes `eslint-config-next` and `eslint-config-prettier`)
-- `@repo/typescript-config`: `tsconfig.json`s used throughout the monorepo
-
-Each package/app is 100% [TypeScript](https://www.typescriptlang.org/).
-
-### Utilities
-
-This Turborepo has some additional tools already setup for you:
-
-- [TypeScript](https://www.typescriptlang.org/) for static type checking
-- [ESLint](https://eslint.org/) for code linting
-- [Prettier](https://prettier.io) for code formatting
-
-### Build
-
-To build all apps and packages, run the following command:
-
-```
-cd my-turborepo
-
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo build
-
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo build
-yarn dlx turbo build
-pnpm exec turbo build
+```sh
+cd packages/db
+bun run db:deploy        # Run migrations against your Neon DB
+bun run db:generate      # Generate the Prisma client
 ```
 
-You can build a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+### 3. (Optional) Build the E2B sandbox template
 
-```
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo build --filter=docs
+This pre-installs a React + Vite + Tailwind environment in E2B for faster project starts.
 
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo build --filter=docs
-yarn exec turbo build --filter=docs
-pnpm exec turbo build --filter=docs
+```sh
+cd apps/backend
+bun run build-template-dev
 ```
 
-### Develop
+Without this, the agent falls back to `code-interpreter-v1` and sets up the React app itself on first use.
 
-To develop all apps and packages, run the following command:
+### 4. Start development servers
 
-```
-cd my-turborepo
-
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo dev
-
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo dev
-yarn exec turbo dev
-pnpm exec turbo dev
+```sh
+# From the root — starts both frontend (3001) and backend (3000) concurrently
+bun run dev
 ```
 
-You can develop a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+Or individually:
 
-```
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo dev --filter=web
+```sh
+# Backend
+cd apps/backend
+bun run dev
 
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo dev --filter=web
-yarn exec turbo dev --filter=web
-pnpm exec turbo dev --filter=web
-```
-
-### Remote Caching
-
-> [!TIP]
-> Vercel Remote Cache is free for all plans. Get started today at [vercel.com](https://vercel.com/signup?/signup?utm_source=remote-cache-sdk&utm_campaign=free_remote_cache).
-
-Turborepo can use a technique known as [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching) to share cache artifacts across machines, enabling you to share build caches with your team and CI/CD pipelines.
-
-By default, Turborepo will cache locally. To enable Remote Caching you will need an account with Vercel. If you don't have an account you can [create one](https://vercel.com/signup?utm_source=turborepo-examples), then enter the following commands:
-
-```
-cd my-turborepo
-
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo login
-
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo login
-yarn exec turbo login
-pnpm exec turbo login
+# Frontend
+cd apps/frontend
+bun run dev
 ```
 
-This will authenticate the Turborepo CLI with your [Vercel account](https://vercel.com/docs/concepts/personal-accounts/overview).
+---
 
-Next, you can link your Turborepo to your Remote Cache by running the following command from the root of your Turborepo:
+## API Reference
 
-```
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo link
+| Method | Endpoint                      | Auth | Description                            |
+| ------ | ----------------------------- | ---- | -------------------------------------- |
+| `POST` | `/auth/register`              | ❌   | Register a new user                    |
+| `POST` | `/auth/login`                 | ❌   | Login, sets JWT cookie                 |
+| `GET`  | `/projects`                   | ✅   | List all projects for the current user |
+| `POST` | `/projects`                   | ✅   | Create a new project                   |
+| `GET`  | `/projects/:id`               | ✅   | Get project with conversation history  |
+| `POST` | `/projects/:id/chat`          | ✅   | Send message to AI agent (SSE stream)  |
+| `POST` | `/projects/:id/conversations` | ✅   | Save a conversation message            |
+| `GET`  | `/health`                     | ❌   | Health check                           |
 
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo link
-yarn exec turbo link
-pnpm exec turbo link
-```
+### SSE Event Types (`POST /projects/:id/chat`)
 
-## Useful Links
+The chat endpoint streams Server-Sent Events:
 
-Learn more about the power of Turborepo:
+| Event         | Payload                    | Description            |
+| ------------- | -------------------------- | ---------------------- |
+| `message`     | `{ from, type, contents }` | AI text response       |
+| `tool_call`   | `{ tool, args }`           | Agent tool invocation  |
+| `preview_url` | `{ url }`                  | Sandbox dev server URL |
+| `error`       | `{ message }`              | Agent error            |
+| `done`        | `{ message }`              | Stream complete        |
 
-- [Tasks](https://turborepo.dev/docs/crafting-your-repository/running-tasks)
-- [Caching](https://turborepo.dev/docs/crafting-your-repository/caching)
-- [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching)
-- [Filtering](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters)
-- [Configuration Options](https://turborepo.dev/docs/reference/configuration)
-- [CLI Usage](https://turborepo.dev/docs/reference/command-line-reference)
+---
+
+## Agent Tools
+
+The LangGraph agent has access to these tools inside the E2B sandbox:
+
+| Tool                         | Description                                  |
+| ---------------------------- | -------------------------------------------- |
+| `write_file`                 | Create or overwrite a single file            |
+| `write_multiple_files`       | Create/overwrite multiple files at once      |
+| `read_file`                  | Read a file's contents                       |
+| `delete_file`                | Delete a file                                |
+| `rename_file`                | Rename/move a file                           |
+| `execute_command`            | Run shell commands in `/home/user/react-app` |
+| `list_directories`           | List directory structure                     |
+| `add_dependency`             | Install npm packages                         |
+| `test_build`                 | Run `npm run build` and return output        |
+| `check_missing_dependencies` | Check for undeclared imports                 |
+| `start_dev_server`           | Start the Vite dev server on port 5173       |
+| `get_context`                | Retrieve project title, goal, and file list  |
+| `save_context`               | Save a note about current project state      |
+| `search`                     | Web search via Exa API                       |
+
+---
+
+## Tech Stack
+
+- **Frontend**: Next.js 16, React 19, Zustand, Axios, Lucide React
+- **Backend**: Express 5, Bun runtime, LangGraph, LangChain
+- **AI**: Google Gemini 2.0 Flash via `@langchain/google`
+- **Sandboxes**: E2B Code Interpreter (`@e2b/code-interpreter`)
+- **Database**: PostgreSQL (Neon) via Prisma ORM
+- **Monorepo**: Turborepo + Bun workspaces
+- **Auth**: JWT in HTTP-only cookies

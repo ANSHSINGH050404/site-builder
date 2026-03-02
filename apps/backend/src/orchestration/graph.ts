@@ -56,7 +56,16 @@ export default async function createAgentGraph({
       .split(/\n+/)
       .map((line) => line.replace(/^[\d\-\*•]\s*/, "").trim())
       .filter((line) => line.length > 0);
-    return { plan: planSteps };
+
+    // Inject the plan as a SystemMessage so the agent node sees it
+    const planMsg = new SystemMessage(
+      `Execution plan (follow these steps):\n${planContent}`,
+    );
+
+    return {
+      plan: planSteps,
+      messages: [planMsg],
+    };
   };
 
   const agentNode = async (state: GraphState) => {

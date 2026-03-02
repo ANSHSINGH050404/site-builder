@@ -110,36 +110,47 @@ export default function AuthPage() {
             />
           </div>
 
-          <div className="form-group relative">
+          <div className="form-group" style={{ position: "relative" }}>
             <label className="form-label" htmlFor="password">
               <Lock size={12} style={{ display: "inline", marginRight: 4 }} />
               Password
             </label>
-            <input
-              id="password"
-              type={showPassword ? "text" : "password"}
-              className="form-input"
-              placeholder={
-                mode === "register"
-                  ? "At least 8 characters"
-                  : "Enter your password"
-              }
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={8}
-            />
-
-            <button
-              type="button"
-              onClick={() => setShowPassword(!showPassword)}
-            >
-              {showPassword ? (
-                <EyeOff className="w-5 h-5" />
-              ) : (
-                <Eye className="w-5 h-5" />
-              )}
-            </button>
+            <div style={{ position: "relative" }}>
+              <input
+                id="password"
+                type={showPassword ? "text" : "password"}
+                className="form-input"
+                style={{ paddingRight: 42 }}
+                placeholder={
+                  mode === "register"
+                    ? "At least 8 characters"
+                    : "Enter your password"
+                }
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={8}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                style={{
+                  position: "absolute",
+                  right: 12,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "var(--text-muted)",
+                  display: "flex",
+                  alignItems: "center",
+                  padding: 0,
+                }}
+              >
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
           </div>
 
           <button
