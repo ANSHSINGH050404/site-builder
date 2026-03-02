@@ -163,8 +163,10 @@ function createDeleteFileTool(sandbox: Sandbox, projectId: string) {
 function createExecuteCommandTool(sandbox: Sandbox) {
   return tool(
     async ({ command }) => {
-      // Block app creation commands - the app already exists
-      const blockedPatterns = [
+      // Only block app-creation commands if the React app ALREADY EXISTS.
+      // This prevents the agent from accidentally bootstrapping a new project
+      // inside an existing one, while allowing the initial fallback setup to work.
+      const appCreationPatterns = [
         /npx\s+create-react-app/,
         /npm\s+create\s+vite/,
         /npm\s+create\s+.*app/,
@@ -172,17 +174,30 @@ function createExecuteCommandTool(sandbox: Sandbox) {
         /create-vite/,
       ];
 
-      const isBlocked = blockedPatterns.some((pattern) =>
-        pattern.test(command),
-      );
-      if (isBlocked) {
-        return `ERROR: App creation commands are not allowed. The React app already exists at ${APP_ROOT}. Instead, use the 'write' or 'write-multiple-files' tools to create/modify files directly. For example, use 'write' to create src/components/YourComponent.tsx instead of creating a new app.`;
+      const isAppCreationCmd = appCreationPatterns.some((p) => p.test(command));
+      if (isAppCreationCmd) {
+        // Check if the app already exists before blocking
+        try {
+          const check = await sandbox.commands.run(
+            `test -f ${APP_ROOT}/package.json && echo "APP_EXISTS" || echo "APP_MISSING"`,
+          );
+          if (check.stdout.includes("APP_EXISTS")) {
+            return (
+              `ERROR: The React app already exists at ${APP_ROOT}. ` +
+              `Do NOT run app-creation commands again. ` +
+              `Use 'write_file' or 'write_multiple_files' to create/modify files instead.`
+            );
+          }
+          // App doesn't exist — allow the creation command to proceed from /home/user
+        } catch {
+          // Can't check — be safe and allow it
+        }
       }
 
       try {
-        const result = await sandbox.commands.run(
-          `cd ${APP_ROOT} && ${command}`,
-        );
+        // For app-creation commands, run from /home/user (not inside react-app)
+        const cwd = isAppCreationCmd ? "/home/user" : APP_ROOT;
+        const result = await sandbox.commands.run(`cd ${cwd} && ${command}`);
         const output = [result.stdout, result.stderr]
           .filter(Boolean)
           .join("\n")
