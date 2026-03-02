@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { prisma } from "db";
-import { HumanMessage } from "@langchain/core/messages";
+import { HumanMessage, AIMessage } from "@langchain/core/messages";
 import createAgentGraph from "../orchestration/graph";
 import { llm } from "../config/llm";
 
@@ -157,11 +157,28 @@ export const chatWithAgent = async (req: Request, res: Response) => {
   try {
     const graph = await createAgentGraph({ projectId, model: llm });
 
+    // Load recent conversation history so the agent knows what it built before
+    const recentConversations = await prisma.conversation.findMany({
+      where: { projectId },
+      orderBy: { createdAt: "asc" },
+      take: 16, // last 8 turns (16 messages)
+    });
+
+    // Convert DB conversations → LangChain messages (skip context notes)
+    const historyMessages = recentConversations
+      .filter((c) => !c.contents.startsWith("[CONTEXT NOTE]"))
+      .map((c) => {
+        if (c.from === "USER") return new HumanMessage(c.contents);
+        return new AIMessage(c.contents);
+      });
+
+    // Put history first, then the new user message last
+    const allMessages = [...historyMessages, new HumanMessage(message)];
+
     const config = {
-      configurable: { thread_id: projectId },
-      recursionLimit: 100, // default is 25 — agent needs more steps on base template
+      recursionLimit: 150, // 20 tool rounds × ~6 graph steps per round + buffer
     };
-    const input = { messages: [new HumanMessage(message)], projectId };
+    const input = { messages: allMessages, projectId };
 
     // Stream the graph execution
     const stream = await graph.stream(input, {

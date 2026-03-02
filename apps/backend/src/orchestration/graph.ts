@@ -2,6 +2,7 @@ import {
   AIMessage,
   HumanMessage,
   SystemMessage,
+  BaseMessage,
 } from "@langchain/core/messages";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 import { StateGraph } from "@langchain/langgraph";
@@ -12,9 +13,38 @@ import { system_message } from "../prompts/system_message";
 import { llm } from "../config/llm";
 import type { GraphState } from "../types/state.type";
 import { StateAnnotation } from "../types/state.type";
-import { MemorySaver } from "@langchain/langgraph";
 
-const memorySaver = new MemorySaver();
+/**
+ * Maximum number of AI↔Tool round-trips before we force-stop.
+ * Each round = 1 AIMessage + 1 ToolMessage = 2 messages.
+ * 20 rounds = 40 messages, which is more than enough for most tasks.
+ */
+const MAX_TOOL_ROUNDS = 20;
+
+/**
+ * When the conversation history grows large, we only send the most recent
+ * messages to the LLM to avoid blowing the context window and to keep
+ * the model focused on the current task.
+ *
+ * We always preserve:
+ *   - The first HumanMessage (original user request) at the top
+ *   - Up to RECENT_WINDOW of the most recent messages
+ */
+const RECENT_WINDOW = 16;
+
+function trimMessages(messages: BaseMessage[]): BaseMessage[] {
+  if (messages.length <= RECENT_WINDOW + 1) return messages;
+
+  // Keep the first HumanMessage so the agent never forgets the original goal
+  const firstUser = messages.find((m) => m instanceof HumanMessage);
+  const recent = messages.slice(-RECENT_WINDOW);
+
+  // Avoid duplicating the first message if it's already in the window
+  if (firstUser && !recent.includes(firstUser)) {
+    return [firstUser, ...recent];
+  }
+  return recent;
+}
 
 export default async function createAgentGraph({
   projectId,
@@ -31,6 +61,10 @@ export default async function createAgentGraph({
 
   const modelWithTools = model.bindTools(tools);
 
+  // ────────────────────────────────────────────────────────────
+  // Planner node — generates a concise step-by-step plan and
+  // injects it as a SystemMessage so the agent can follow it.
+  // ────────────────────────────────────────────────────────────
   const plannerNode = async (state: GraphState) => {
     const userMessages = state.messages.filter(
       (msg) => msg instanceof HumanMessage,
@@ -52,14 +86,15 @@ export default async function createAgentGraph({
       typeof response.content === "string"
         ? response.content
         : String(response.content);
+
     const planSteps = planContent
       .split(/\n+/)
       .map((line) => line.replace(/^[\d\-\*•]\s*/, "").trim())
       .filter((line) => line.length > 0);
 
-    // Inject the plan as a SystemMessage so the agent node sees it
+    // Prepend the plan as a SystemMessage so the agent sees it first
     const planMsg = new SystemMessage(
-      `Execution plan (follow these steps):\n${planContent}`,
+      `Execution plan — follow these steps in order:\n${planContent}`,
     );
 
     return {
@@ -68,101 +103,77 @@ export default async function createAgentGraph({
     };
   };
 
+  // ────────────────────────────────────────────────────────────
+  // Agent node — sends trimmed history to the LLM, gets back
+  // either tool calls or a final text response.
+  // ────────────────────────────────────────────────────────────
   const agentNode = async (state: GraphState) => {
-    try {
-      // Log messages being sent for debugging
-      console.log("agentNode: Invoking model with messages:", {
-        count: state.messages.length,
-        types: state.messages.map((msg) => msg.constructor.name),
-      });
-
-      // Ensure we have valid messages
-      if (!state.messages || state.messages.length === 0) {
-        throw new Error("No messages provided to agentNode");
-      }
-
-      // Prepend system message so the model always has its instructions
-      const systemMsg = new SystemMessage(
-        system_message.replace("{{context}}", ""),
-      );
-      const response = await modelWithTools.invoke([
-        systemMsg,
-        ...state.messages,
-      ]);
-
-      if (!response) {
-        throw new Error("Model returned undefined response");
-      }
-
-      return { messages: [response] };
-    } catch (error: any) {
-      console.error("Error in agentNode:", error);
-      console.error("Error details:", {
-        message: error?.message,
-        response: error?.response,
-        cause: error?.cause,
-        name: error?.name,
-      });
-
-      // Check if it's an API error with more details
-      if (error?.response) {
-        try {
-          console.error(
-            "API Response:",
-            JSON.stringify(error.response, null, 2),
-          );
-        } catch (e) {
-          console.error("Could not stringify API response");
-        }
-      }
-
-      // Check for specific Google API error patterns
-      if (
-        error?.message?.includes("reduce") ||
-        error?.message?.includes("parts")
-      ) {
-        console.error(
-          "This appears to be a Google GenAI API response parsing error.",
-        );
-        console.error("Possible causes:");
-        console.error("  1. Invalid API key");
-        console.error("  2. Invalid model name");
-        console.error("  3. API response format mismatch");
-        console.error("  4. Rate limiting or quota exceeded");
-      }
-
-      throw error;
+    if (!state.messages || state.messages.length === 0) {
+      throw new Error("No messages provided to agentNode");
     }
+
+    // Apply sliding-window to avoid context overflow on long sessions
+    const windowedMessages = trimMessages(state.messages);
+
+    const roundsUsed = Math.floor(
+      state.messages.filter((m) => m instanceof AIMessage).length,
+    );
+
+    console.log(
+      `agentNode: round ${roundsUsed + 1}/${MAX_TOOL_ROUNDS}, ` +
+        `total messages: ${state.messages.length} → sending ${windowedMessages.length} to LLM`,
+    );
+
+    const systemMsg = new SystemMessage(
+      system_message.replace("{{context}}", ""),
+    );
+
+    const response = await modelWithTools.invoke([
+      systemMsg,
+      ...windowedMessages,
+    ]);
+
+    if (!response) {
+      throw new Error("Model returned undefined response");
+    }
+
+    return { messages: [response] };
   };
 
   const toolNode = new ToolNode(tools);
 
+  // ────────────────────────────────────────────────────────────
+  // Router — decides whether to call tools or stop
+  // ────────────────────────────────────────────────────────────
   const shouldContinue = (state: GraphState) => {
     const messages = state.messages;
     const lastMessage = messages[messages.length - 1] as AIMessage;
 
-    // Hard stop — too many iterations
-    if (messages.length > 60) {
-      console.warn("Message limit reached — stopping agent loop");
+    // Count completed AI→Tool rounds
+    const aiMessages = messages.filter((m) => m instanceof AIMessage);
+    if (aiMessages.length >= MAX_TOOL_ROUNDS) {
+      console.warn(
+        `Agent reached ${MAX_TOOL_ROUNDS} tool rounds — stopping to prevent infinite loop`,
+      );
       return "__end__";
     }
 
-    // If the last ToolMessage contains a preview URL, the job is done — stop
-    const prevMessage = messages[messages.length - 1];
-    if (prevMessage?.constructor?.name === "ToolMessage") {
-      const content = String(prevMessage.content);
+    // If the last ToolMessage contains a preview URL, the job is done
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg?.constructor?.name === "ToolMessage") {
+      const content = String(lastMsg.content);
       if (content.match(/https:\/\/5173-[\w-]+\.e2b\.app/)) {
-        console.log("Dev server started successfully — agent stopping");
+        console.log("Dev server started — stopping agent loop");
         return "__end__";
       }
     }
 
-    // Check if the last AI message has tool calls — if so, keep going
-    if (lastMessage.tool_calls && lastMessage.tool_calls.length > 0) {
+    // Keep going if the AI requested tool calls
+    if (lastMessage?.tool_calls && lastMessage.tool_calls.length > 0) {
       return "tools";
     }
 
-    // No tool calls → AI gave a final text response → done
+    // No tool calls → AI sent a final text reply → done
     return "__end__";
   };
 
@@ -170,11 +181,15 @@ export default async function createAgentGraph({
     .addNode("planner", plannerNode)
     .addNode("agent", agentNode)
     .addNode("tools", toolNode)
-
     .addEdge("__start__", "planner")
     .addEdge("planner", "agent")
     .addConditionalEdges("agent", shouldContinue)
     .addEdge("tools", "agent");
 
-  return workflow.compile({ checkpointer: memorySaver });
+  // NOTE: No MemorySaver — we don't persist graph state across HTTP requests.
+  // Conversations are stored in PostgreSQL via the DB and passed in as the
+  // initial HumanMessage for each chat call. Sharing a MemorySaver across
+  // requests caused messages to accumulate from previous runs and immediately
+  // trigger the hard stop limit on subsequent chats.
+  return workflow.compile();
 }
