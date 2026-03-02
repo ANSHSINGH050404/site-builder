@@ -230,22 +230,28 @@ export default function ProjectPage() {
     if (loadingProject || autoStartFiredRef.current) return;
     const autostart = searchParams?.get("autostart");
     const prompt = searchParams?.get("prompt");
+
     if (autostart === "1" && prompt) {
       autoStartFiredRef.current = true;
-      window.history.replaceState({}, "", window.location.pathname);
+
+      // We process the prompt but we do NOT clear the URL immediately via replaceState
+      // because in React Strict Mode that causes the second render to see a blank URL
+      // before the timeout can even fire.
+      const decoded = decodeURIComponent(prompt);
+      setMessage(decoded);
 
       const timer = setTimeout(() => {
-        const decoded = decodeURIComponent(prompt);
-        setMessage(decoded);
         handleSend(decoded);
-      }, 600);
+        // Clean up the URL only *after* we've successfully initiated sending
+        window.history.replaceState({}, "", window.location.pathname);
+      }, 500);
 
       return () => {
+        // We only reset the ref so StrictMode's second mount can pick it up
+        autoStartFiredRef.current = false;
         clearTimeout(timer);
-        autoStartFiredRef.current = false; // Reset for React StrictMode
       };
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadingProject, searchParams]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {

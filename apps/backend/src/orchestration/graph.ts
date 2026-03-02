@@ -32,20 +32,6 @@ const MAX_TOOL_ROUNDS = 20;
  */
 const RECENT_WINDOW = 16;
 
-function trimMessages(messages: BaseMessage[]): BaseMessage[] {
-  if (messages.length <= RECENT_WINDOW + 1) return messages;
-
-  // Keep the first HumanMessage so the agent never forgets the original goal
-  const firstUser = messages.find((m) => m instanceof HumanMessage);
-  const recent = messages.slice(-RECENT_WINDOW);
-
-  // Avoid duplicating the first message if it's already in the window
-  if (firstUser && !recent.includes(firstUser)) {
-    return [firstUser, ...recent];
-  }
-  return recent;
-}
-
 export default async function createAgentGraph({
   projectId,
   model,
@@ -97,6 +83,7 @@ export default async function createAgentGraph({
       `Execution plan — follow these steps in order:\n${planContent}`,
     );
 
+    console.log(`[Planner] Generated ${planSteps.length} step plan`);
     return {
       plan: planSteps,
       messages: [planMsg],
@@ -104,7 +91,7 @@ export default async function createAgentGraph({
   };
 
   // ────────────────────────────────────────────────────────────
-  // Agent node — sends trimmed history to the LLM, gets back
+  // Agent node — sends history to the LLM, gets back
   // either tool calls or a final text response.
   // ────────────────────────────────────────────────────────────
   const agentNode = async (state: GraphState) => {
@@ -112,16 +99,14 @@ export default async function createAgentGraph({
       throw new Error("No messages provided to agentNode");
     }
 
-    // Apply sliding-window to avoid context overflow on long sessions
-    const windowedMessages = trimMessages(state.messages);
-
     const roundsUsed = Math.floor(
       state.messages.filter((m) => m instanceof AIMessage).length,
     );
 
     console.log(
-      `agentNode: round ${roundsUsed + 1}/${MAX_TOOL_ROUNDS}, ` +
-        `total messages: ${state.messages.length} → sending ${windowedMessages.length} to LLM`,
+      `[Agent] Round ${roundsUsed + 1}/${MAX_TOOL_ROUNDS} | Sending ${
+        state.messages.length
+      } messages to model...`,
     );
 
     const systemMsg = new SystemMessage(
@@ -130,11 +115,18 @@ export default async function createAgentGraph({
 
     const response = await modelWithTools.invoke([
       systemMsg,
-      ...windowedMessages,
+      ...state.messages,
     ]);
 
     if (!response) {
       throw new Error("Model returned undefined response");
+    }
+
+    if (response.tool_calls && response.tool_calls.length > 0) {
+      const toolNames = response.tool_calls.map((t) => t.name).join(", ");
+      console.log(`[Agent] Returning tool calls: ${toolNames}`);
+    } else {
+      console.log(`[Agent] Returning text response (no tools)`);
     }
 
     return { messages: [response] };
