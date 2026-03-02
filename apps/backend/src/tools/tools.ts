@@ -369,49 +369,27 @@ function createStartDevServerTool(sandbox: Sandbox) {
   return tool(
     async () => {
       try {
-        // Check if server is already running
-        const checkOutput = await sandbox.commands.run(
-          `lsof -ti:5173 2>/dev/null || echo "not_running"`,
-        );
-        if (!checkOutput.stdout.includes("not_running")) {
-          return `Dev server is already running on port 5173. Preview URL: https://5173-${sandbox.sandboxId}.e2b.app`;
-        }
-
-        const checkPackageJson = await sandbox.commands.run(
-          `cd ${APP_ROOT} && test -f package.json && echo "exists" || echo "missing"`,
-        );
-        if (checkPackageJson.stdout.includes("missing")) {
-          return `Error: package.json not found in ${APP_ROOT}. Make sure you're working in the correct directory.`;
-        }
-
+        // Run dev server in background using E2B's native background option
         await sandbox.commands.run(
-          `cd ${APP_ROOT} && nohup npm run dev > /tmp/vite.log 2>&1 &`,
+          `cd ${APP_ROOT} && npm run dev > /tmp/vite.log 2>&1`,
+          { background: true },
         );
 
-        let attempts = 0;
-        let serverRunning = false;
-        while (attempts < 10 && !serverRunning) {
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-          const verifyOutput = await sandbox.commands.run(
-            `lsof -ti:5173 2>/dev/null || echo "not_running"`,
-          );
-          if (!verifyOutput.stdout.includes("not_running")) {
-            serverRunning = true;
-            break;
-          }
-          attempts++;
+        // Just wait a couple of seconds for Vite to boot instead of relying on lsof
+        // which can sometimes fail in isolated sandboxes
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+
+        const logs = await sandbox.commands.run(
+          `cat /tmp/vite.log 2>/dev/null || echo ""`,
+        );
+
+        if (logs.stdout.includes("error") || logs.stdout.includes("ERR")) {
+          return `Dev server might have failed. Logs:\n${logs.stdout}`;
         }
 
-        if (serverRunning) {
-          return `Dev server started successfully on port 5173.\n\nPreview URL: https://5173-${sandbox.sandboxId}.e2b.app\n\nThe dev server is running in the background. You can access your app at the preview URL above.`;
-        } else {
-          const logs = await sandbox.commands.run(
-            `tail -20 /tmp/vite.log 2>/dev/null || echo "No logs available"`,
-          );
-          return `Dev server may not have started properly. Check the logs:\n${logs.stdout}\n\nYou can try running 'cd ${APP_ROOT} && npm run dev' manually in the sandbox.`;
-        }
+        return `Dev server started successfully in the background.\nPreview URL: https://5173-${sandbox.sandboxId}.e2b.app`;
       } catch (e) {
-        return `Failed to start dev server: ${e}. You can try running 'cd ${APP_ROOT} && npm run dev' manually in the sandbox.`;
+        return `Failed to start dev server: ${e}.`;
       }
     },
     {
