@@ -48,6 +48,8 @@ export default function ProjectPage() {
     conversations,
     setConversations,
     addConversation,
+    updateConversation,
+    updateProject,
   } = useProjectStore();
 
   const [loadingProject, setLoadingProject] = useState(true);
@@ -107,36 +109,18 @@ export default function ProjectPage() {
     scrollToBottom();
   }, [conversations, scrollToBottom]);
 
-  // Auto-trigger agent when arriving from a fresh project creation
+  // Ref to track if we already fired the autostart so we don't fire twice
   const autoStartFiredRef = useRef(false);
-  useEffect(() => {
-    if (loadingProject || autoStartFiredRef.current) return;
-    const autostart = searchParams?.get("autostart");
-    const prompt = searchParams?.get("prompt");
-    if (autostart === "1" && prompt) {
-      autoStartFiredRef.current = true;
-      window.history.replaceState({}, "", window.location.pathname);
-      // Small delay so the UI is fully mounted, then programmatically send
-      const timer = setTimeout(async () => {
-        const decoded = decodeURIComponent(prompt);
-        setMessage(decoded);
-        // Trigger send via a synthetic approach: update message then click send
-        sendRef.current?.(decoded);
-      }, 600);
-      return () => clearTimeout(timer);
-    }
-  }, [loadingProject, searchParams]);
-
-  // Ref to expose handleSend so autostart can call it with a custom message
-  const sendRef = useRef<((msg: string) => void) | null>(null);
 
   const handleSend = async (msgOverride?: string) => {
-    const content = (msgOverride ?? message).trim();
+    // Determine the content depending on if it's called with a string override
+    const content = (
+      typeof msgOverride === "string" ? msgOverride : message
+    ).trim();
     if (!content || sending) return;
     setSendError("");
     setMessage("");
     setSending(true);
-    sendRef.current = handleSend; // keep ref current
 
     // Optimistic UI — show user message immediately
     const userMsg: ConversationMessage = {
@@ -170,6 +154,9 @@ export default function ProjectPage() {
       const decoder = new TextDecoder();
       let buffer = "";
 
+      let currentAgentMsgId = "";
+      let currentAgentContents = "";
+
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -177,7 +164,7 @@ export default function ProjectPage() {
 
         // SSE chunks are separated by double newlines
         const parts = buffer.split("\n\n");
-        buffer = parts.pop() ?? "";
+        buffer = parts.pop() ?? ""; // keep the last incomplete chunk in the buffer
 
         for (const part of parts) {
           const eventLine = part.match(/^event: (.+)$/m)?.[1];
@@ -192,31 +179,36 @@ export default function ProjectPage() {
           }
 
           if (eventLine === "message") {
-            // AI text reply
-            const agentMsg: ConversationMessage = {
-              id: `agent-${Date.now()}-${Math.random()}`,
-              projectId,
-              from: "AGENT",
-              type: "TEXT_MESSAGE",
-              contents: payload.contents,
-              createdAt: new Date().toISOString(),
-            };
-            addConversation(agentMsg);
+            if (!currentAgentMsgId) {
+              currentAgentMsgId = `agent-${Date.now()}`;
+              addConversation({
+                id: currentAgentMsgId,
+                projectId,
+                from: "AGENT",
+                type: "TEXT_MESSAGE",
+                contents: payload.contents || "...",
+                createdAt: new Date().toISOString(),
+              });
+              currentAgentContents = payload.contents;
+            } else {
+              currentAgentContents += payload.contents || "";
+              updateConversation(currentAgentMsgId, {
+                contents: currentAgentContents,
+              });
+            }
           } else if (eventLine === "tool_call") {
-            // Tool call in progress — sandbox is being set up
             setSandboxStatus("creating");
-            const toolMsg: ConversationMessage = {
-              id: `tool-${Date.now()}-${Math.random()}`,
+            const toolMsgId = `tool-${Date.now()}-${Math.random()}`;
+            addConversation({
+              id: toolMsgId,
               projectId,
               from: "AGENT",
               type: "TOOL_CALL",
-              contents: `Running: ${payload.tool}`,
+              contents: `Executing tool: ${payload.tool}\n${payload.args || ""}`,
               toolCall: payload.tool?.toUpperCase().replace(/-/g, "_") as any,
               createdAt: new Date().toISOString(),
-            };
-            addConversation(toolMsg);
+            });
           } else if (eventLine === "preview_url") {
-            // Sandbox is live!
             setPreviewUrl(payload.url);
             setSandboxStatus("live");
             setActiveProject({ ...activeProject!, sandboxUrl: payload.url });
@@ -224,16 +216,37 @@ export default function ProjectPage() {
             setSandboxStatus("error");
             setSendError(payload.message || "Agent error");
           }
-          // "done" event — stream ended, nothing to do
         }
       }
     } catch (err: any) {
       setSendError(err?.message || "Failed to send message. Please try again.");
     } finally {
       setSending(false);
-      textareaRef.current?.focus();
     }
   };
+
+  // Auto-trigger agent when arriving from a fresh project creation
+  useEffect(() => {
+    if (loadingProject || autoStartFiredRef.current) return;
+    const autostart = searchParams?.get("autostart");
+    const prompt = searchParams?.get("prompt");
+    if (autostart === "1" && prompt) {
+      autoStartFiredRef.current = true;
+      window.history.replaceState({}, "", window.location.pathname);
+
+      const timer = setTimeout(() => {
+        const decoded = decodeURIComponent(prompt);
+        setMessage(decoded);
+        handleSend(decoded);
+      }, 600);
+
+      return () => {
+        clearTimeout(timer);
+        autoStartFiredRef.current = false; // Reset for React StrictMode
+      };
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadingProject, searchParams]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {

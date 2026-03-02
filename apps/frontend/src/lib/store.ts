@@ -45,6 +45,11 @@ type ProjectStore = {
   conversations: ConversationMessage[];
   setConversations: (msgs: ConversationMessage[]) => void;
   addConversation: (msg: ConversationMessage) => void;
+  updateConversation: (
+    id: string,
+    updates: Partial<ConversationMessage>,
+  ) => void;
+  updateProject: (id: string, updates: Partial<Project>) => void;
 };
 
 export const useProjectStore = create<ProjectStore>((set) => ({
@@ -56,4 +61,14 @@ export const useProjectStore = create<ProjectStore>((set) => ({
   setConversations: (conversations) => set({ conversations }),
   addConversation: (msg) =>
     set((s) => ({ conversations: [...s.conversations, msg] })),
+  updateConversation: (id, updates) =>
+    set((s) => ({
+      conversations: s.conversations.map((c) =>
+        c.id === id ? { ...c, ...updates } : c,
+      ),
+    })),
+  updateProject: (id, updates) =>
+    set((s) => ({
+      projects: s.projects.map((p) => (p.id === id ? { ...p, ...updates } : p)),
+    })),
 }));
